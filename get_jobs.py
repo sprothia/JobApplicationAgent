@@ -1,18 +1,21 @@
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import requests
+import http_client
 from constants import (
     ASHBY_COMPANIES,
     ASHBY_URL,
     GREENHOUSE_COMPANIES,
     GREENHOUSE_URL,
-    LEVER_COMPANIES,
-    LEVER_URL,
     LEVEL_KEYWORDS,
     ROLE_KEYWORDS,
+    EXCLUDE_KEYWORDS,
     SIMPLIFY_CATEGORIES,
     SIMPLIFY_COMPANIES,
     SIMPLIFY_URL,
+    YC_BOARDS_FILE,
 )
 
 
@@ -28,8 +31,7 @@ class Job:
 # Source 1
 def fetch_greenhouse(company: str, token: str) -> list[Job]:
     try:
-        response = requests.get(GREENHOUSE_URL.format(token=token), timeout=15)
-        response.raise_for_status()
+        response = http_client.get(GREENHOUSE_URL.format(token=token))
     except requests.RequestException as e:
         print(f"Warning: failed to fetch {company} ({token}): {e}")
         return []
@@ -50,8 +52,7 @@ def fetch_greenhouse(company: str, token: str) -> list[Job]:
 # Source 2
 def fetch_ashby(company: str, token: str) -> list[Job]:
     try:
-        response = requests.get(ASHBY_URL.format(token=token), timeout=15)
-        response.raise_for_status()
+        response = http_client.get(ASHBY_URL.format(token=token))
     except requests.RequestException as e:
         print(f"Warning: failed to fetch {company} ({token}): {e}")
         return []
@@ -69,34 +70,10 @@ def fetch_ashby(company: str, token: str) -> list[Job]:
     ]
 
 
-# Source 3
-def fetch_lever(company: str, token: str) -> list[Job]:
-    try:
-        response = requests.get(LEVER_URL.format(token=token), timeout=15)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print(f"Warning: failed to fetch {company} ({token}): {e}")
-        return []
-
-    return [
-        Job(
-            id=job["id"],
-            company=company,
-            title=job["text"],
-            location=job["categories"].get("location", ""),
-            url=job["hostedUrl"],
-            # Lever gives createdAt in milliseconds since epoch
-            posted_date=datetime.fromtimestamp(job["createdAt"] / 1000, timezone.utc).isoformat(),
-        )
-        for job in response.json()
-    ]
-
-
-# Source 4: listings are already new grad, so they only need has_role().
+# Source 3: listings are already new grad, so they only need has_role().
 def fetch_simplify() -> list[Job]:
     try:
-        response = requests.get(SIMPLIFY_URL, timeout=60)
-        response.raise_for_status()
+        response = http_client.get(SIMPLIFY_URL, timeout=60)
     except requests.RequestException as e:
         print(f"Warning: failed to fetch SimplifyJobs: {e}")
         return []
@@ -126,15 +103,38 @@ def is_relevant(job: Job) -> bool:
     return any(k in job.title.lower() for k in LEVEL_KEYWORDS) and has_role(job)
 
 
+def is_excluded(job: Job) -> bool:
+    # "Member of Technical Staff" is a regular role, not a staff-level one.
+    title = job.title.lower().replace("member of technical staff", "")
+    return any(k in title for k in EXCLUDE_KEYWORDS)
+
+
+def is_startup_relevant(job: Job) -> bool:
+    """Startups rarely put a level in the title, so keep any matching role that isn't senior or an internship."""
+    return is_relevant(job) or (has_role(job) and not is_excluded(job))
+
+
+FETCHERS = {"greenhouse": fetch_greenhouse, "ashby": fetch_ashby}
+
+
+def load_yc_boards() -> list[dict]:
+    if not os.path.exists(YC_BOARDS_FILE):
+        print(f"Warning: {YC_BOARDS_FILE} not found, run discover_yc.py to add YC startups")
+        return []
+    with open(YC_BOARDS_FILE) as f:
+        return json.load(f)
+
+
 def get_jobs() -> list[Job]:
     jobs = []
     for company, token in GREENHOUSE_COMPANIES.items():
         jobs.extend(job for job in fetch_greenhouse(company, token) if is_relevant(job))
     for company, token in ASHBY_COMPANIES.items():
         jobs.extend(job for job in fetch_ashby(company, token) if is_relevant(job))
-    for company, token in LEVER_COMPANIES.items():
-        jobs.extend(job for job in fetch_lever(company, token) if is_relevant(job))
     jobs.extend(job for job in fetch_simplify() if has_role(job))
+    for board in load_yc_boards():
+        fetch = FETCHERS[board["platform"]]
+        jobs.extend(job for job in fetch(board["company"], board["token"]) if is_startup_relevant(job))
     return jobs
 
 

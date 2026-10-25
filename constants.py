@@ -94,10 +94,6 @@ ASHBY_COMPANIES = {
     "Plaid": "plaid",
 }
 
-LEVER_COMPANIES = {
-    "Zoox": "zoox",
-}
-
 # Exact company names as they appear in the SimplifyJobs listings.
 SIMPLIFY_COMPANIES = [
     "Google",
@@ -128,8 +124,13 @@ SIMPLIFY_CATEGORIES = ["Software", "Software Engineering", "AI/ML/Data"]
 
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
 ASHBY_URL = "https://api.ashbyhq.com/posting-api/job-board/{token}"
-LEVER_URL = "https://api.lever.co/v0/postings/{token}?mode=json"
 SIMPLIFY_URL = "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
+
+# YC startups: discover_yc.py finds their job boards and saves them to YC_BOARDS_FILE.
+YC_URL = "https://yc-oss.github.io/api/companies/hiring.json"
+YC_BOARDS_FILE = "yc_boards.json"
+YC_LOCATION = "San Francisco"
+YC_MAX_TEAM_SIZE = 200
 
 LEVEL_KEYWORDS = ["new grad", "new graduate", "early career", "university", "entry level", "entry-level"]
 ROLE_KEYWORDS = [
@@ -140,4 +141,15 @@ ROLE_KEYWORDS = [
     "ai engineer",
     "machine learning engineer",
     "ml engineer",
+    "backend engineer",
+    "frontend engineer",
+    "full stack engineer",
+    "fullstack engineer",
+    "full-stack engineer",
+    "product engineer",
+    "founding engineer",
+    "infrastructure engineer",
+    "member of technical staff",
 ]
+# Startup jobs with no level in the title are kept unless the title has one of these.
+EXCLUDE_KEYWORDS = ["senior", "sr.", "sr ", "staff", "principal", "lead", "manager", "director", "head of", "intern"]
