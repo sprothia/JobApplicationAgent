@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import requests
@@ -10,6 +11,7 @@ from constants import (
     GREENHOUSE_COMPANIES,
     GREENHOUSE_URL,
     LEVEL_KEYWORDS,
+    NON_US_LOCATION_KEYWORDS,
     ROLE_KEYWORDS,
     EXCLUDE_KEYWORDS,
     SIMPLIFY_CATEGORIES,
@@ -27,6 +29,8 @@ class Job:
     location: str
     url: str
     posted_date: str
+    source: str  # "greenhouse", "ashby" or "simplify"
+    board_token: str  # Greenhouse/Ashby board name; empty for SimplifyJobs
 
 # Source 1
 def fetch_greenhouse(company: str, token: str) -> list[Job]:
@@ -44,6 +48,8 @@ def fetch_greenhouse(company: str, token: str) -> list[Job]:
             location=job["location"]["name"],
             url=job["absolute_url"],
             posted_date=job.get("first_published", ""),
+            source="greenhouse",
+            board_token=token,
         )
         for job in response.json()["jobs"]
     ]
@@ -65,6 +71,8 @@ def fetch_ashby(company: str, token: str) -> list[Job]:
             location=job.get("location", ""),
             url=job["jobUrl"],
             posted_date=job.get("publishedAt", ""),
+            source="ashby",
+            board_token=token,
         )
         for job in response.json()["jobs"]
     ]
@@ -86,6 +94,8 @@ def fetch_simplify() -> list[Job]:
             location="; ".join(job.get("locations", [])),
             url=job["url"],
             posted_date=datetime.fromtimestamp(job["date_posted"], timezone.utc).isoformat(),
+            source="simplify",
+            board_token="",
         )
         for job in response.json()
         if job.get("active")
@@ -93,6 +103,12 @@ def fetch_simplify() -> list[Job]:
         and job["company_name"] in SIMPLIFY_COMPANIES
         and job.get("category") in SIMPLIFY_CATEGORIES
     ]
+
+
+def is_outside_us(job: Job) -> bool:
+    # Whole words, so "uk" doesn't match inside another word.
+    location = job.location.lower()
+    return any(re.search(rf"\b{re.escape(k)}\b", location) for k in NON_US_LOCATION_KEYWORDS)
 
 
 def has_role(job: Job) -> bool:
@@ -135,7 +151,7 @@ def get_jobs() -> list[Job]:
     for board in load_yc_boards():
         fetch = FETCHERS[board["platform"]]
         jobs.extend(job for job in fetch(board["company"], board["token"]) if is_startup_relevant(job))
-    return jobs
+    return [job for job in jobs if not is_outside_us(job)]
 
 
 if __name__ == "__main__":
