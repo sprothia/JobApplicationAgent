@@ -151,5 +151,20 @@ ROLE_KEYWORDS = [
     "infrastructure engineer",
     "member of technical staff",
 ]
+# Jobs whose location mentions one of these (whole words, case-insensitive) are outside the US and dropped.
+NON_US_LOCATION_KEYWORDS = [
+    "canada", "toronto", "vancouver", "montreal",
+    "united kingdom", "uk", "england", "london", "ireland", "dublin",
+    "europe", "emea", "germany", "berlin", "munich", "france", "paris", "netherlands", "amsterdam",
+    "spain", "barcelona", "madrid", "switzerland", "zurich", "sweden", "stockholm", "denmark", "aarhus",
+    "poland", "warsaw", "romania", "bucharest", "serbia", "belgrade", "austria", "vienna",
+    "israel", "tel aviv", "turkey", "türkiye", "istanbul", "kosovo",
+    "india", "bangalore", "bengaluru", "hyderabad", "mumbai", "pune",
+    "apac", "singapore", "japan", "tokyo", "korea", "seoul", "china", "hong kong", "taiwan",
+    "australia", "sydney", "melbourne",
+    "qatar", "doha", "uae", "dubai",
+    "latam", "brazil", "são paulo", "mexico city", "argentina",
+]
+
 # Startup jobs with no level in the title are kept unless the title has one of these.
 EXCLUDE_KEYWORDS = ["senior", "sr.", "sr ", "staff", "principal", "lead", "manager", "director", "head of", "intern"]

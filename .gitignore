@@ -4,3 +4,7 @@ __pycache__/
 .env
 .DS_Store
 yc_boards.json
+profile.json
+submitted.json
+applications.json
+Siddharth_Prothia_resume.pdf
