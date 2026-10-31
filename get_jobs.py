@@ -2,7 +2,6 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import requests
 import http_client
 from constants import (
@@ -14,9 +13,6 @@ from constants import (
     NON_US_LOCATION_KEYWORDS,
     ROLE_KEYWORDS,
     EXCLUDE_KEYWORDS,
-    SIMPLIFY_CATEGORIES,
-    SIMPLIFY_COMPANIES,
-    SIMPLIFY_URL,
     YC_BOARDS_FILE,
 )
 
@@ -29,8 +25,8 @@ class Job:
     location: str
     url: str
     posted_date: str
-    source: str  # "greenhouse", "ashby" or "simplify"
-    board_token: str  # Greenhouse/Ashby board name; empty for SimplifyJobs
+    source: str  # "greenhouse" or "ashby"
+    board_token: str  # the company's Greenhouse/Ashby board name
 
 # Source 1
 def fetch_greenhouse(company: str, token: str) -> list[Job]:
@@ -78,33 +74,6 @@ def fetch_ashby(company: str, token: str) -> list[Job]:
     ]
 
 
-# Source 3: listings are already new grad, so they only need has_role().
-def fetch_simplify() -> list[Job]:
-    try:
-        response = http_client.get(SIMPLIFY_URL, timeout=60)
-    except requests.RequestException as e:
-        print(f"Warning: failed to fetch SimplifyJobs: {e}")
-        return []
-
-    return [
-        Job(
-            id=job["id"],
-            company=job["company_name"],
-            title=job["title"],
-            location="; ".join(job.get("locations", [])),
-            url=job["url"],
-            posted_date=datetime.fromtimestamp(job["date_posted"], timezone.utc).isoformat(),
-            source="simplify",
-            board_token="",
-        )
-        for job in response.json()
-        if job.get("active")
-        and job.get("is_visible", True)
-        and job["company_name"] in SIMPLIFY_COMPANIES
-        and job.get("category") in SIMPLIFY_CATEGORIES
-    ]
-
-
 def is_outside_us(job: Job) -> bool:
     # Whole words, so "uk" doesn't match inside another word.
     location = job.location.lower()
@@ -147,7 +116,6 @@ def get_jobs() -> list[Job]:
         jobs.extend(job for job in fetch_greenhouse(company, token) if is_relevant(job))
     for company, token in ASHBY_COMPANIES.items():
         jobs.extend(job for job in fetch_ashby(company, token) if is_relevant(job))
-    jobs.extend(job for job in fetch_simplify() if has_role(job))
     for board in load_yc_boards():
         fetch = FETCHERS[board["platform"]]
         jobs.extend(job for job in fetch(board["company"], board["token"]) if is_startup_relevant(job))

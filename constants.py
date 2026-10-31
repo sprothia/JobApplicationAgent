@@ -92,39 +92,11 @@ ASHBY_COMPANIES = {
     "Linear": "linear",
     "Ramp": "ramp",
     "Plaid": "plaid",
+    "Applied Intuition": "applied",
 }
-
-# Exact company names as they appear in the SimplifyJobs listings.
-SIMPLIFY_COMPANIES = [
-    "Google",
-    "Meta",
-    "Apple",
-    "Amazon",
-    "Microsoft",
-    "NVIDIA",
-    "Netflix",
-    "Tesla",
-    "Uber",
-    "TikTok",
-    "ByteDance",
-    "Salesforce",
-    "Adobe",
-    "LinkedIn",
-    "Snap",
-    "Intuit",
-    "Atlassian",
-    "ServiceNow",
-    "Palantir",
-    "Rippling",
-    "Applied Intuition",
-    "Mistral AI",
-    "Skild AI",
-]
-SIMPLIFY_CATEGORIES = ["Software", "Software Engineering", "AI/ML/Data"]
 
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
 ASHBY_URL = "https://api.ashbyhq.com/posting-api/job-board/{token}"
-SIMPLIFY_URL = "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
 
 # YC startups: discover_yc.py finds their job boards and saves them to YC_BOARDS_FILE.
 YC_URL = "https://yc-oss.github.io/api/companies/hiring.json"

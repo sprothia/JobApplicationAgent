@@ -77,7 +77,9 @@ def main():
 
     # Kept low so Ashby doesn't rate-limit us.
     with ThreadPoolExecutor(max_workers=6) as pool:
-        boards = [b for b in pool.map(find_board, companies) if b]
+        found = [b for b in pool.map(find_board, companies) if b]
+    # Two YC companies can share a name (e.g. "Conduit") and match the same board; keep it once.
+    boards = list({(b["platform"], b["token"]): b for b in found}.values())
 
     with open(YC_BOARDS_FILE, "w") as f:
         json.dump(boards, f, indent=2)

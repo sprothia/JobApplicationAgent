@@ -260,8 +260,7 @@ def prepare_all(profile: dict):
     jobs = [
         job
         for job in get_jobs()
-        if job.source in ("greenhouse", "ashby")
-        and job.id not in submitted
+        if job.id not in submitted
         and applications.get(job.id, {}).get("status") != "skipped"  # skips are permanent
     ]
     print(f"Preparing {len(jobs)} jobs ({Counter(job.source for job in jobs)})...")
