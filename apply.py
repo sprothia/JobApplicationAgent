@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import textwrap
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -469,6 +470,79 @@ def fill_ashby_form(page: Page, app: dict, profile: dict) -> list[str]:
     return failed
 
 
+# ---------- Asking the user ----------
+
+# Field types the user answers in the browser rather than the terminal (essays, uploads).
+BROWSER_ONLY_TYPES = {"textarea", "LongText", "input_file", "File", "EducationHistory"}
+
+
+def short_location(location: str) -> str:
+    """'A; B; C; D' -> 'A · B +2 more', so long location lists don't flood the terminal."""
+    location = re.sub(r",\s*(United States|USA|US)\b", "", location)
+    parts = [p.strip() for p in re.split(r"[;|]", location) if p.strip()]
+    if len(parts) <= 2:
+        return " · ".join(parts)
+    return f"{parts[0]} · {parts[1]} +{len(parts) - 2} more"
+
+
+def remember_answer(profile: dict, label: str, value: str):
+    """Save an answer under the question's exact wording, so future forms asking it get it automatically."""
+    keyword = " ".join(label.split()).lower().rstrip("*").strip()
+    profile["answers"].insert(0, {"keywords": [keyword], "answer": value})  # first, so it wins
+    save_json(PROFILE_FILE, profile)
+
+
+def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
+    """Ask each unanswered required question in the terminal and fill the answer in on the page.
+    Returns the questions left for the user to do in the browser."""
+    questions = {q["label"]: q for q in app.get("questions", [])}
+    resume_path = os.path.abspath(profile["resume_path"])
+    left = []
+    asked = 0
+    for label in app["unanswered"]:
+        fields = [
+            f for f in questions.get(label, {}).get("fields", [])
+            if f["name"] not in IGNORED_FIELDS and f["type"] != "input_hidden"
+        ]
+        if not fields or fields[0]["type"] in BROWSER_ONLY_TYPES:
+            left.append(label)
+            continue
+        field = fields[0]
+        options = field["options"] or (["Yes", "No"] if field["type"] == "Boolean" else [])
+
+        asked += 1
+        print(f"\n  Q{asked}. " + textwrap.shorten(" ".join(label.split()), 300, placeholder="..."))
+        for i, option in enumerate(options, 1):
+            print(f"      {i}. {option}")
+        reply = input("      > " + ("number" if options else "answer") + " (Enter = do it in the browser): ").strip()
+        if not reply:
+            left.append(label)
+            continue
+        if options:
+            value = options[int(reply) - 1] if reply.isdigit() and 0 < int(reply) <= len(options) else pick_option([reply], options)
+            if not value:
+                print("      Not one of the options, so leaving it for the browser.")
+                left.append(label)
+                continue
+        else:
+            value = reply
+
+        try:
+            if is_ashby:
+                fill_ashby_field(page, ashby_container(page, field["name"], label), field["type"], field["name"], value, resume_path)
+            elif field_locator(page, field["name"]).get_attribute("role") == "combobox":
+                choose_option(page, field["name"], value)
+            else:
+                field_locator(page, field["name"]).fill(value)
+        except PlaywrightError:
+            print("      Couldn't fill that in on the page, so leaving it for the browser.")
+            left.append(label)
+            continue
+        if input("      Remember this for future forms? (y/n): ").strip().lower() == "y":
+            remember_answer(profile, label, value)
+    return left
+
+
 def fill_all(profile: dict, job_filter: str):
     """job_filter is a company name, or a platform ("ashby" / "greenhouse"); empty means every job."""
     applications = load_json(APPLICATIONS_FILE, {})
@@ -486,7 +560,8 @@ def fill_all(profile: dict, job_filter: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         for i, (job_id, app) in enumerate(todo, 1):
-            print(f"\n[{i}/{len(todo)}] {app['company']} | {app['title']} | {app['location']}")
+            print(f"\n━━━ [{i}/{len(todo)}] {app['company']} · {app['title'].strip()} ━━━")
+            print(f"    {short_location(app['location'])}")
             if not browser.is_connected():  # the user closed the whole window
                 browser = p.chromium.launch(headless=False)
             page = browser.new_page()
@@ -503,13 +578,15 @@ def fill_all(profile: dict, job_filter: str):
                     pass  # some pages never go fully idle; fill anyway
                 failed = fill_ashby_form(page, app, profile) if is_ashby else fill_form(page, app, profile)
 
-                blanks = [label.strip() for label in app["unanswered"]] + failed
-                if blanks:
-                    print("  Fill these in yourself:")
-                    for label in blanks:
-                        print(f"    - {label[:100]}")
+                if app["unanswered"]:
+                    print(f"\n    {len(app['unanswered'])} question(s) need your answer:")
+                left = ask_user(page, app, profile, is_ashby) + failed
+                if left:
+                    print("\n    Do these in the browser:")
+                    for label in left:
+                        print("      - " + textwrap.shorten(" ".join(label.split()), 100, placeholder="..."))
                 else:
-                    print("  Everything is filled in.")
+                    print("\n    Everything is filled in.")
             except PlaywrightError:
                 # e.g. the company redirects to its own careers site, or a bot check blocks the form.
                 print(f"  Couldn't find the application form (page is at {page.url}).")
@@ -517,7 +594,7 @@ def fill_all(profile: dict, job_filter: str):
 
             choice = ""
             while choice not in ("y", "s", "q"):
-                choice = input("  Submit in the browser, then type y = submitted, s = skip, q = quit: ").strip().lower()
+                choice = input("\n    Submit in the browser, then type y = submitted, s = skip, q = quit: ").strip().lower()
             if choice == "q":
                 return
             if choice == "y":
