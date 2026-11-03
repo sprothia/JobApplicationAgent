@@ -7,8 +7,9 @@
   python apply.py fill [filter]   Fill: open each prepared job in a browser and fill it in. You review,
                                   answer anything left blank and click Submit yourself. Jobs you mark
                                   submitted move from applications.json to submitted.json.
-                                  The optional filter is a company ("Notion") or a platform
-                                  ("ashby" / "greenhouse").
+                                  The optional filter is a company ("Notion"), a platform
+                                  ("ashby" / "greenhouse"), or "new" (jobs first seen in the
+                                  latest prepare run).
 """
 
 import json
@@ -24,6 +25,7 @@ import requests
 from playwright.sync_api import Page, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
+import get_jobs as job_sources
 import http_client
 from get_jobs import Job, get_jobs
 
@@ -247,6 +249,7 @@ def prepare(job: Job, profile: dict, questions: list[dict]) -> dict:
         "title": job.title,
         "location": job.location,
         "source": job.source,
+        "board_token": job.board_token,
         "url": application_url(job),
         "status": "needs_input" if unanswered else "ready",
         "unanswered": unanswered,
@@ -255,16 +258,41 @@ def prepare(job: Job, profile: dict, questions: list[dict]) -> dict:
     }
 
 
+def board_of(app: dict) -> str:
+    """The job's board name (older entries don't store it, so read it from the URL)."""
+    if app.get("board_token"):
+        return app["board_token"]
+    match = re.search(r"for=([^&]+)|jobs\.ashbyhq\.com/([^/]+)/", app["url"])
+    return (match.group(1) or match.group(2)) if match else ""
+
+
 def prepare_all(profile: dict):
     applications = load_json(APPLICATIONS_FILE, {})
     submitted = load_json(SUBMITTED_FILE, {})
+    posted = get_jobs()
     jobs = [
         job
-        for job in get_jobs()
+        for job in posted
         if job.id not in submitted
         and applications.get(job.id, {}).get("status") != "skipped"  # skips are permanent
     ]
     print(f"Preparing {len(jobs)} jobs ({Counter(job.source for job in jobs)})...")
+
+    # Jobs no longer posted are closed, unless their board just failed to load this run.
+    posted_ids = {job.id for job in posted}
+    closed_now = []
+    for job_id, app in applications.items():
+        if (
+            app["status"] in ("ready", "needs_input")
+            and job_id not in posted_ids
+            and board_of(app) not in job_sources.failed_boards
+        ):
+            app["status"] = "closed"
+            closed_now.append(app)
+
+    for app in applications.values():
+        app.pop("new", None)  # "new" only marks jobs first seen in the latest run
+    new_now = []
 
     for job in jobs:
         # Forms don't change, so download each one once and reuse it. Answers are still
@@ -279,14 +307,19 @@ def prepare_all(profile: dict):
             if job.source == "ashby":
                 time.sleep(1)  # Ashby rate-limits its form requests
         if questions:  # no questions means the posting was taken down
+            is_new = job.id not in applications
             applications[job.id] = prepare(job, profile, questions)
+            if is_new:
+                applications[job.id]["new"] = True
+                new_now.append(applications[job.id])
 
     save_json(APPLICATIONS_FILE, applications)
 
     statuses = Counter(app["status"] for app in applications.values())
     print(
         f"\nReady: {statuses['ready']}   Needs input: {statuses['needs_input']}   "
-        f"Skipped: {statuses['skipped']}   Submitted (in {SUBMITTED_FILE}): {len(submitted)}"
+        f"Skipped: {statuses['skipped']}   Closed: {statuses['closed']}   "
+        f"Submitted (in {SUBMITTED_FILE}): {len(submitted)}"
     )
 
     print("\nReady (every required question answered):")
@@ -300,6 +333,14 @@ def prepare_all(profile: dict):
             print(f"  {app['company']} | {app['title']} | {app['location']}")
             for label in app["unanswered"]:
                 print(f"      - {label.strip()[:100]}")
+
+    if closed_now:
+        print(f"\n{len(closed_now)} taken down since last run (marked closed):")
+        for app in closed_now:
+            print(f"  {app['company']} · {app['title'].strip()}")
+    print(f"\n{len(new_now)} new since last run" + (" (open just these with `python apply.py fill new`):" if new_now else "."))
+    for app in new_now:
+        print(f"  {app['company']} · {app['title'].strip()}")
 
 
 # ---------- Fill ----------
@@ -544,15 +585,21 @@ def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
 
 
 def fill_all(profile: dict, job_filter: str):
-    """job_filter is a company name, or a platform ("ashby" / "greenhouse"); empty means every job."""
+    """job_filter is a company name, a platform ("ashby" / "greenhouse"), or "new" (jobs first seen in
+    the latest `python apply.py` run); empty means every job."""
     applications = load_json(APPLICATIONS_FILE, {})
     submitted = load_json(SUBMITTED_FILE, {})
     job_filter = job_filter.lower()
+
+    def matches(app: dict) -> bool:
+        if job_filter == "new":
+            return app.get("new", False)
+        return job_filter in app["company"].lower() or job_filter == app.get("source", "greenhouse")
+
     todo = [
         (job_id, app)
         for job_id, app in applications.items()
-        if app["status"] in ("ready", "needs_input")
-        and (job_filter in app["company"].lower() or job_filter == app.get("source", "greenhouse"))
+        if app["status"] in ("ready", "needs_input") and matches(app)
     ]
     if not todo:
         raise SystemExit("No prepared applications to fill. Run `python apply.py` first.")

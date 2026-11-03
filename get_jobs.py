@@ -28,12 +28,19 @@ class Job:
     source: str  # "greenhouse" or "ashby"
     board_token: str  # the company's Greenhouse/Ashby board name
 
+
+# Boards that failed to load in the last get_jobs() run. Their jobs are missing from the results
+# but probably still posted, so apply.py doesn't mark them closed.
+failed_boards: set[str] = set()
+
+
 # Source 1
 def fetch_greenhouse(company: str, token: str) -> list[Job]:
     try:
         response = http_client.get(GREENHOUSE_URL.format(token=token))
     except requests.RequestException as e:
         print(f"Warning: failed to fetch {company} ({token}): {e}")
+        failed_boards.add(token)
         return []
 
     return [
@@ -57,6 +64,7 @@ def fetch_ashby(company: str, token: str) -> list[Job]:
         response = http_client.get(ASHBY_URL.format(token=token))
     except requests.RequestException as e:
         print(f"Warning: failed to fetch {company} ({token}): {e}")
+        failed_boards.add(token)
         return []
 
     return [
@@ -111,6 +119,7 @@ def load_yc_boards() -> list[dict]:
 
 
 def get_jobs() -> list[Job]:
+    failed_boards.clear()
     jobs = []
     for company, token in GREENHOUSE_COMPANIES.items():
         jobs.extend(job for job in fetch_greenhouse(company, token) if is_relevant(job))
