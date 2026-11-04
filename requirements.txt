@@ -1,2 +1,5 @@
 requests
 playwright
+langchain
+langchain-anthropic
+python-dotenv

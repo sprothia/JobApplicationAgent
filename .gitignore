@@ -3,8 +3,7 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
-yc_boards.json
-profile.json
-submitted.json
-applications.json
-Siddharth_Prothia_resume.pdf
+
+# Personal data
+data/
+profile/

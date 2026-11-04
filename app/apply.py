@@ -1,15 +1,15 @@
-"""Prepare and fill Greenhouse applications from profile.json.
+"""Prepare and fill Greenhouse and Ashby applications from profile.json.
 
-  python apply.py                 Prepare: for each Greenhouse job from get_jobs(), fetch its form and
-                                  answer every question from the profile. Questions the profile can't
-                                  answer are left blank: if any are required, the job is marked
-                                  'needs_input' and they're listed. Results go to applications.json.
-  python apply.py fill [filter]   Fill: open each prepared job in a browser and fill it in. You review,
-                                  answer anything left blank and click Submit yourself. Jobs you mark
-                                  submitted move from applications.json to submitted.json.
-                                  The optional filter is a company ("Notion"), a platform
-                                  ("ashby" / "greenhouse"), or "new" (jobs first seen in the
-                                  latest prepare run).
+  python app/apply.py                 Prepare: fetch jobs from get_jobs(), download each form and answer
+                                      every question from the profile. Questions the profile can't answer
+                                      are left blank; if any are required, the job is 'needs_input'.
+                                      Saves to applications.json and prints the jobs new since last run.
+  python app/apply.py fill [filter]   Fill: open each prepared job in a browser and fill it in. You review,
+                                      answer anything left blank and click Submit yourself. Jobs you mark
+                                      submitted move from applications.json to submitted.json.
+                                      The optional filter is a company ("Notion"), a platform
+                                      ("ashby" / "greenhouse"), or "new" (jobs first seen in the
+                                      latest prepare run).
 """
 
 import json
@@ -26,12 +26,10 @@ from playwright.sync_api import Page, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
 import get_jobs as job_sources
-import http_client
+from config.constants import APPLICATIONS_FILE, PROFILE_DIR, PROFILE_FILE, SUBMITTED_FILE
+from utils import http_client
 from get_jobs import Job, get_jobs
 
-PROFILE_FILE = "profile.json"
-APPLICATIONS_FILE = "applications.json"  # jobs still to apply to
-SUBMITTED_FILE = "submitted.json"  # jobs you've applied to
 QUESTIONS_URL = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs/{id}?questions=true"
 
 # Ashby has no public questions API. This is the request Ashby's own application page makes to
@@ -56,14 +54,19 @@ EEO_FIELDS = {"gender", "race", "hispanic_ethnicity", "veteran_status", "disabil
 IGNORED_FIELDS = {"resume_text", "cover_letter_text", "latitude", "longitude"}
 
 
-def load_json(path: str, default):
+def resume_file(profile: dict) -> str:
+    """The resume's full path. profile.json names it relative to the profile folder."""
+    return str(PROFILE_DIR / profile["resume_path"])
+
+
+def load_json(path, default):
     if not os.path.exists(path):
         return default
     with open(path) as f:
         return json.load(f)
 
 
-def save_json(path: str, data):
+def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -196,7 +199,7 @@ def answer_field(field: dict, label: str, profile: dict) -> str:
     name, field_type = field["name"], field["type"]
     basics = profile["basics"]
     if name in ("resume", "_systemfield_resume"):
-        return profile["resume_path"]
+        return resume_file(profile)
     if name == "_systemfield_name":
         return f"{basics['first_name']} {basics['last_name']}"
     if name in BASIC_FIELDS:
@@ -248,6 +251,7 @@ def prepare(job: Job, profile: dict, questions: list[dict]) -> dict:
         "company": job.company,
         "title": job.title,
         "location": job.location,
+        "posted_date": job.posted_date,
         "source": job.source,
         "board_token": job.board_token,
         "url": application_url(job),
@@ -266,7 +270,11 @@ def board_of(app: dict) -> str:
     return (match.group(1) or match.group(2)) if match else ""
 
 
-def prepare_all(profile: dict):
+def refresh_jobs(profile: dict) -> dict:
+    """Fetch every job board, prepare new and open jobs, and save applications.json.
+
+    Returns the totals per status, the jobs first seen this run, and the jobs taken down this run.
+    """
     applications = load_json(APPLICATIONS_FILE, {})
     submitted = load_json(SUBMITTED_FILE, {})
     posted = get_jobs()
@@ -315,32 +323,29 @@ def prepare_all(profile: dict):
 
     save_json(APPLICATIONS_FILE, applications)
 
-    statuses = Counter(app["status"] for app in applications.values())
+    totals = Counter(app["status"] for app in applications.values())
+    totals["submitted"] = len(submitted)
+    return {"totals": dict(totals), "new": new_now, "closed": closed_now}
+
+
+def print_summary(result: dict):
+    totals, closed_now, new_now = result["totals"], result["closed"], result["new"]
     print(
-        f"\nReady: {statuses['ready']}   Needs input: {statuses['needs_input']}   "
-        f"Skipped: {statuses['skipped']}   Closed: {statuses['closed']}   "
-        f"Submitted (in {SUBMITTED_FILE}): {len(submitted)}"
+        f"\nReady: {totals.get('ready', 0)}   Needs input: {totals.get('needs_input', 0)}   "
+        f"Skipped: {totals.get('skipped', 0)}   Closed: {totals.get('closed', 0)}   "
+        f"Submitted: {totals.get('submitted', 0)}"
     )
-
-    print("\nReady (every required question answered):")
-    for app in applications.values():
-        if app["status"] == "ready":
-            print(f"  {app['company']} | {app['title']} | {app['location']}")
-
-    print("\nNeeds input (required questions left blank for you):")
-    for app in applications.values():
-        if app["status"] == "needs_input":
-            print(f"  {app['company']} | {app['title']} | {app['location']}")
-            for label in app["unanswered"]:
-                print(f"      - {label.strip()[:100]}")
 
     if closed_now:
         print(f"\n{len(closed_now)} taken down since last run (marked closed):")
         for app in closed_now:
             print(f"  {app['company']} · {app['title'].strip()}")
-    print(f"\n{len(new_now)} new since last run" + (" (open just these with `python apply.py fill new`):" if new_now else "."))
+    print(f"\n{len(new_now)} new since last run" + (" (open just these with `python app/apply.py fill new`):" if new_now else "."))
     for app in new_now:
-        print(f"  {app['company']} · {app['title'].strip()}")
+        status = "ready" if app["status"] == "ready" else "needs input"
+        print(f"  {app['company']} · {app['title'].strip()} · {short_location(app['location'])} ({status})")
+        for label in app["unanswered"]:
+            print(f"      - {label.strip()[:100]}")
 
 
 # ---------- Fill ----------
@@ -412,7 +417,7 @@ def fill_education(page: Page, education: dict) -> list[str]:
 
 def fill_form(page: Page, app: dict, profile: dict) -> list[str]:
     """Fill every prepared answer. Returns labels of fields that couldn't be filled."""
-    resume_path = os.path.abspath(profile["resume_path"])
+    resume_path = resume_file(profile)
     failed = []
 
     # The phone's country dropdown isn't in the questions API either.
@@ -496,7 +501,7 @@ def fill_ashby_field(page: Page, box, field_type: str, path: str, value: str, re
 
 def fill_ashby_form(page: Page, app: dict, profile: dict) -> list[str]:
     """Fill every prepared answer on an Ashby form. Returns labels of fields that couldn't be filled."""
-    resume_path = os.path.abspath(profile["resume_path"])
+    resume_path = resume_file(profile)
     types = {f["name"]: f["type"] for q in app["questions"] for f in q["fields"]}
     failed = []
     for answer in app["answers"]:
@@ -537,7 +542,7 @@ def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
     """Ask each unanswered required question in the terminal and fill the answer in on the page.
     Returns the questions left for the user to do in the browser."""
     questions = {q["label"]: q for q in app.get("questions", [])}
-    resume_path = os.path.abspath(profile["resume_path"])
+    resume_path = resume_file(profile)
     left = []
     asked = 0
     for label in app["unanswered"]:
@@ -586,7 +591,7 @@ def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
 
 def fill_all(profile: dict, job_filter: str):
     """job_filter is a company name, a platform ("ashby" / "greenhouse"), or "new" (jobs first seen in
-    the latest `python apply.py` run); empty means every job."""
+    the latest `python app/apply.py` run); empty means every job."""
     applications = load_json(APPLICATIONS_FILE, {})
     submitted = load_json(SUBMITTED_FILE, {})
     job_filter = job_filter.lower()
@@ -602,7 +607,7 @@ def fill_all(profile: dict, job_filter: str):
         if app["status"] in ("ready", "needs_input") and matches(app)
     ]
     if not todo:
-        raise SystemExit("No prepared applications to fill. Run `python apply.py` first.")
+        raise SystemExit("No prepared applications to fill. Run `python app/apply.py` first.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -665,13 +670,13 @@ def main():
     profile = load_json(PROFILE_FILE, None)
     if profile is None:
         raise SystemExit(f"{PROFILE_FILE} not found")
-    if not os.path.exists(profile["resume_path"]):
-        print(f"Warning: resume not found at {profile['resume_path']}")
+    if not os.path.exists(resume_file(profile)):
+        print(f"Warning: resume not found at {resume_file(profile)}")
 
     if len(sys.argv) > 1 and sys.argv[1] == "fill":
         fill_all(profile, job_filter=" ".join(sys.argv[2:]))
     else:
-        prepare_all(profile)
+        print_summary(refresh_jobs(profile))
 
 
 if __name__ == "__main__":
