@@ -11,7 +11,7 @@ from langchain.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from config.constants import ROOT
-from tools import find_jobs
+from tools import check_for_new_jobs, list_submitted, search_open_jobs
 
 load_dotenv(ROOT / ".env", override=True)  # .env wins over an old key set in the shell
 
@@ -27,11 +27,15 @@ Rules:
 - Keep replies short: company, title, location, and status (ready = every question answered,
   needs input = some questions left for him), plus the unanswered questions when relevant.
 - Jobs come only from the companies being tracked (hand-picked Greenhouse/Ashby companies and YC startups in SF).
+- search_open_jobs searches every open job he hasn't applied to or skipped, as of the last check. It's
+  instant. To look for postings newer than that, call check_for_new_jobs (takes 1-2 minutes). Use it when he asks for new or latest jobs, or to "find" jobs
+  and the saved ones don't cover it. Ask first if unsure.
+- You can't fill or submit applications yet. If he asks, tell him to run `python app/apply.py fill`.
 """
 
 agent = create_agent(
     MODEL,
-    tools=[tool(find_jobs)],
+    tools=[tool(search_open_jobs), tool(check_for_new_jobs), tool(list_submitted)],
     system_prompt=SYSTEM_PROMPT,
     checkpointer=InMemorySaver(),  # remembers earlier messages in this chat
 )
