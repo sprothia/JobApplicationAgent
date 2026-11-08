@@ -1,22 +1,37 @@
-"""Functions the agent will call. Each takes options and returns data instead of printing."""
+"""The agent's tools. Each takes options and returns data for the agent to read."""
 
 import json
 import re
+import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-import apply
-from apply import load_json
-from config.constants import APPLICATIONS_FILE, PROFILE_FILE, SUBMITTED_FILE
-from config.constants import YC_BOARDS_FILE
-from get_jobs import PLATFORM_URLS, board_jobs, failed_boards, load_settings, save_settings
+import requests
 
-HIDDEN_STATUSES = {"skipped", "closed"}
+from answers import prepare
+from browser import fill_jobs
+from config.constants import APPLICATIONS_FILE, PROFILE_FILE, SUBMITTED_FILE, YC_BOARDS_FILE
+from forms import fetch_ashby_questions, fetch_questions
+from get_jobs import (
+    PLATFORM_URLS,
+    board_jobs,
+    discover_yc_boards,
+    failed_boards,
+    get_jobs,
+    load_settings,
+    save_settings,
+)
+from utils.storage import OPEN_STATUSES, load_json, record_jobs, save_json
 
 
+# How apply_to_jobs talks to him while a form is open, since that happens inside the tool.
 def ask_in_chat(question: str) -> str:
-    """How apply_to_jobs asks him things: show the question and wait for his reply."""
     print("\nAgent: " + question.strip())
     return input("You: ")
+
+
+def tell_in_chat(message: str):
+    print("\nAgent: " + message.strip())
 
 
 def summarize(job_id: str, app: dict) -> dict:
@@ -72,7 +87,7 @@ def search_open_jobs(
     """
     matches = []
     for job_id, app in load_json(APPLICATIONS_FILE, {}).items():
-        if app["status"] in HIDDEN_STATUSES:
+        if app["status"] not in OPEN_STATUSES:
             continue
         if role and role.lower() not in app["title"].lower():
             continue
@@ -95,23 +110,76 @@ def search_open_jobs(
     return matches[:limit]
 
 
+def board_of(app: dict) -> str:
+    """The job's board name (older entries don't store it, so read it from the URL)."""
+    if app.get("board_token"):
+        return app["board_token"]
+    match = re.search(r"for=([^&]+)|jobs\.ashbyhq\.com/([^/]+)/", app["url"])
+    return (match.group(1) or match.group(2)) if match else ""
+
+
 def check_for_new_jobs() -> dict:
     """Go to every tracked company's job board, find postings that are new since the last check, save them,
     and prepare their answers. Takes 1-2 minutes.
 
     Returns the totals per status, the jobs new since the last check, the jobs taken down since
-    then, and any job boards that failed to load.
+    then, job boards that failed to load, and jobs whose form failed to download (both retried next check).
     """
-    result = apply.refresh_jobs(load_json(PROFILE_FILE, None))
-    return {
-        "totals": result["totals"],
-        "new": [
-            {key: app[key] for key in ("company", "title", "location", "status", "unanswered")}
-            for app in result["new"]
-        ],
-        "closed": [{"company": app["company"], "title": app["title"].strip()} for app in result["closed"]],
-        "failed_boards": sorted(failed_boards),
-    }
+    profile = load_json(PROFILE_FILE, None)
+    applications = load_json(APPLICATIONS_FILE, {})
+    submitted = load_json(SUBMITTED_FILE, {})
+    posted = get_jobs()
+    jobs = [
+        job
+        for job in posted
+        if job.id not in submitted
+        and applications.get(job.id, {}).get("status") != "skipped"  # skips are permanent
+    ]
+
+    # Jobs no longer posted are closed, unless their board just failed to load this run.
+    posted_ids = {job.id for job in posted}
+    closed = []
+    for job_id, app in applications.items():
+        if app["status"] in OPEN_STATUSES and job_id not in posted_ids and board_of(app) not in failed_boards:
+            app["status"] = "closed"
+            closed.append({"company": app["company"], "title": app["title"].strip()})
+
+    for app in applications.values():
+        app.pop("new", None)  # "new" only marks jobs first seen in the latest check
+    new, failed_forms = [], []
+
+    for job in jobs:
+        # Forms don't change, so download each one once and reuse it. Answers are still
+        # recomputed every check, so profile changes apply.
+        questions = applications.get(job.id, {}).get("questions")
+        if not questions:
+            try:
+                questions = fetch_ashby_questions(job) if job.source == "ashby" else fetch_questions(job)
+            except requests.RequestException:
+                failed_forms.append(f"{job.company} - {job.title}")
+                continue
+            if job.source == "ashby":
+                time.sleep(1)  # Ashby rate-limits its form requests
+        if questions:  # no questions means the posting was taken down
+            is_new = job.id not in applications
+            applications[job.id] = prepare(job, profile, questions)
+            if is_new:
+                applications[job.id]["new"] = True
+                new.append(summarize(job.id, applications[job.id]))
+
+    save_json(APPLICATIONS_FILE, applications)
+
+    totals = Counter(app["status"] for app in applications.values())
+    totals["submitted"] = len(submitted)
+    return {"totals": dict(totals), "new": new, "closed": closed, "failed_boards": sorted(failed_boards), "failed_forms": failed_forms}
+
+
+def refresh_yc_startups() -> dict:
+    """Look through the YC directory for SF startups that are hiring and find their Greenhouse/Ashby job
+    boards, so their jobs get checked from now on. Takes several minutes; worth doing about once a week.
+    Their jobs show up on the next check_for_new_jobs.
+    """
+    return discover_yc_boards()
 
 
 def list_submitted(company: str | None = None, days: int | None = None, limit: int = 20) -> list[dict]:
@@ -148,10 +216,24 @@ def apply_to_jobs(job_ids: list[str]) -> list[dict]:
     Returns each job's result: "submitted", "skipped", or "not done" (he stopped before it).
     """
     applications = load_json(APPLICATIONS_FILE, {})
-    open_ids = [job_id for job_id in job_ids if applications.get(job_id, {}).get("status") in apply.OPEN_STATUSES]
-    results = apply.fill_jobs(load_json(PROFILE_FILE, None), open_ids, ask=ask_in_chat) if open_ids else []
+    open_ids = [job_id for job_id in job_ids if applications.get(job_id, {}).get("status") in OPEN_STATUSES]
+    results = fill_jobs(load_json(PROFILE_FILE, None), open_ids, ask_in_chat, tell_in_chat) if open_ids else []
     results += [{"id": job_id, "result": "not an open job id"} for job_id in job_ids if job_id not in open_ids]
     return results
+
+
+def skip_jobs(job_ids: list[str]) -> str:
+    """Skip open jobs by id (ids come from search_open_jobs). Skips are permanent: they never come back,
+    even on later checks. Confirm with him first if he named jobs loosely (e.g. "skip all of Lyft")."""
+    marked = record_jobs(job_ids, "skipped")
+    return f"Skipped {len(marked)} job(s)." + (f" Not open job ids: {sorted(set(job_ids) - set(marked))}" if len(marked) < len(job_ids) else "")
+
+
+def mark_submitted(job_ids: list[str]) -> str:
+    """Record open jobs as applied to, for jobs he applied to some other way (e.g. on the company's site).
+    Ids come from search_open_jobs. They move to his submitted list."""
+    marked = record_jobs(job_ids, "submitted")
+    return f"Marked {len(marked)} job(s) as submitted." + (f" Not open job ids: {sorted(set(job_ids) - set(marked))}" if len(marked) < len(job_ids) else "")
 
 
 def list_companies() -> dict:

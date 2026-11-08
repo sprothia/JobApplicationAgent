@@ -17,8 +17,11 @@ from tools import (
     check_for_new_jobs,
     list_companies,
     list_submitted,
+    mark_submitted,
+    refresh_yc_startups,
     remove_company,
     search_open_jobs,
+    skip_jobs,
 )
 
 load_dotenv(ROOT / ".env", override=True)  # .env wins over an old key set in the shell
@@ -36,17 +39,30 @@ Rules:
   needs input = some questions left for him), plus the unanswered questions when relevant.
 - Jobs come only from the companies being tracked (hand-picked Greenhouse/Ashby companies and YC startups in SF).
 - search_open_jobs searches every open job he hasn't applied to or skipped, as of the last check. It's
-  instant. To look for postings newer than that, call check_for_new_jobs (takes 1-2 minutes). Use it when he asks for new or latest jobs, or to "find" jobs
-  and the saved ones don't cover it. Ask first if unsure.
+  instant. To look for postings newer than that, call check_for_new_jobs (takes 1-2 minutes). Use it
+  when he asks for new or latest jobs, or to "find" jobs and the saved ones don't cover it. Ask first if unsure.
+- refresh_yc_startups takes several minutes. Only run it when he asks to look for new YC startups.
 - To apply, find the job ids with search_open_jobs, then call apply_to_jobs once with all of them. It asks him
   any missing questions itself. He always clicks Submit; never say you submitted anything.
+- skip_jobs and mark_submitted also take ids from search_open_jobs. Skips are permanent.
 """
 
 agent = create_agent(
     MODEL,
     tools=[
         tool(f)
-        for f in (search_open_jobs, check_for_new_jobs, list_submitted, apply_to_jobs, list_companies, add_company, remove_company)
+        for f in (
+            search_open_jobs,
+            check_for_new_jobs,
+            apply_to_jobs,
+            skip_jobs,
+            mark_submitted,
+            list_submitted,
+            list_companies,
+            add_company,
+            remove_company,
+            refresh_yc_startups,
+        )
     ],
     system_prompt=SYSTEM_PROMPT,
     checkpointer=InMemorySaver(),  # remembers earlier messages in this chat

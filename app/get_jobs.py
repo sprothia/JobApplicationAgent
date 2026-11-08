@@ -1,14 +1,8 @@
-"""Find matching jobs from three sources: Greenhouse, Ashby, and YC startups in SF.
-
-  python app/get_jobs.py             Print every matching job.
-  python app/get_jobs.py discover    Find the job boards of hiring YC startups and save them to
-                                 YC_BOARDS_FILE. Takes a few minutes; rerun every week or so.
-"""
+"""Find matching jobs from three sources: Greenhouse, Ashby, and YC startups in SF."""
 
 import json
 import os
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -115,7 +109,7 @@ PLATFORM_URLS = {"ashby": ASHBY_URL, "greenhouse": GREENHOUSE_URL}
 # their board names, so discover_yc_boards() finds them once and saves them to YC_BOARDS_FILE.
 def fetch_yc() -> list[Job]:
     if not os.path.exists(YC_BOARDS_FILE):
-        print(f"Warning: {YC_BOARDS_FILE} not found, run `python app/get_jobs.py discover` to add YC startups")
+        print(f"Warning: {YC_BOARDS_FILE} not found; ask the agent to refresh YC startups")
         return []
     with open(YC_BOARDS_FILE) as f:
         boards = json.load(f)
@@ -165,7 +159,8 @@ def find_board(company: dict) -> dict | None:
     return None
 
 
-def discover_yc_boards():
+def discover_yc_boards() -> dict:
+    """Find the job boards of hiring YC startups in SF and save them to YC_BOARDS_FILE. Takes a few minutes."""
     settings = load_settings()
     already_tracked = {*settings["greenhouse"].values(), *settings["ashby"].values()}
     companies = [
@@ -175,7 +170,6 @@ def discover_yc_boards():
         and (c.get("team_size") or 0) <= YC_MAX_TEAM_SIZE
         and not already_tracked.intersection(candidate_tokens(c))
     ]
-    print(f"Checking {len(companies)} YC companies...")
 
     # Kept low so Ashby doesn't rate-limit us.
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -183,9 +177,19 @@ def discover_yc_boards():
     # Two YC companies can share a name (e.g. "Conduit") and match the same board; keep it once.
     boards = list({(b["platform"], b["token"]): b for b in found}.values())
 
+    old = set()
+    if os.path.exists(YC_BOARDS_FILE):
+        with open(YC_BOARDS_FILE) as f:
+            old = {b["company"] for b in json.load(f)}
     with open(YC_BOARDS_FILE, "w") as f:
         json.dump(boards, f, indent=2)
-    print(f"Found {len(boards)} job boards, saved to {YC_BOARDS_FILE}")
+    names = {b["company"] for b in boards}
+    return {
+        "checked": len(companies),
+        "startups_with_boards": len(boards),
+        "added": sorted(names - old),
+        "dropped": sorted(old - names),
+    }
 
 
 # Filters
@@ -226,12 +230,3 @@ def get_jobs() -> list[Job]:
     ignored = {name.lower() for name in settings["ignored_companies"]}
     return [job for job in jobs if not is_outside_us(job) and job.company.lower() not in ignored]
 
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "discover":
-        discover_yc_boards()
-    else:
-        jobs = get_jobs()
-        for job in jobs:
-            print(f"{job.company} | {job.title} | {job.location} | {job.url}")
-        print(f"\nTotal: {len(jobs)} jobs")

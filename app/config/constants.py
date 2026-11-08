@@ -16,7 +16,7 @@ SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
 ASHBY_URL = "https://api.ashbyhq.com/posting-api/job-board/{token}"
 
-# YC startups: `python app/get_jobs.py discover` finds their job boards and saves them to YC_BOARDS_FILE.
+# YC startups: the refresh_yc_startups tool finds their job boards and saves them to YC_BOARDS_FILE.
 YC_URL = "https://yc-oss.github.io/api/companies/hiring.json"
 YC_LOCATION = "San Francisco"
 YC_MAX_TEAM_SIZE = 200
