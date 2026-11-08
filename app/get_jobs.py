@@ -16,14 +16,13 @@ from urllib.parse import urlparse
 import requests
 from utils import http_client
 from config.constants import (
-    ASHBY_COMPANIES,
     ASHBY_URL,
-    GREENHOUSE_COMPANIES,
     GREENHOUSE_URL,
     LEVEL_KEYWORDS,
     NON_US_LOCATION_KEYWORDS,
     ROLE_KEYWORDS,
     EXCLUDE_KEYWORDS,
+    SETTINGS_FILE,
     YC_BOARDS_FILE,
     YC_LOCATION,
     YC_MAX_TEAM_SIZE,
@@ -41,6 +40,18 @@ class Job:
     posted_date: str
     source: str  # "greenhouse" or "ashby"
     board_token: str  # the company's Greenhouse/Ashby board name
+
+
+def load_settings() -> dict:
+    """The companies to track (read every run, since the agent can change them)."""
+    with open(SETTINGS_FILE) as f:
+        return json.load(f)
+
+
+def save_settings(settings: dict):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
 
 
 # Boards that failed to load in the last get_jobs() run. Their jobs are missing from the results
@@ -155,7 +166,8 @@ def find_board(company: dict) -> dict | None:
 
 
 def discover_yc_boards():
-    already_tracked = {*GREENHOUSE_COMPANIES.values(), *ASHBY_COMPANIES.values()}
+    settings = load_settings()
+    already_tracked = {*settings["greenhouse"].values(), *settings["ashby"].values()}
     companies = [
         c
         for c in requests.get(YC_URL, timeout=60).json()
@@ -204,13 +216,15 @@ def is_startup_relevant(job: Job) -> bool:
 
 def get_jobs() -> list[Job]:
     failed_boards.clear()
+    settings = load_settings()
     jobs = []
-    for company, token in GREENHOUSE_COMPANIES.items():
+    for company, token in settings["greenhouse"].items():
         jobs.extend(job for job in fetch_greenhouse(company, token) if is_relevant(job))
-    for company, token in ASHBY_COMPANIES.items():
+    for company, token in settings["ashby"].items():
         jobs.extend(job for job in fetch_ashby(company, token) if is_relevant(job))
     jobs.extend(job for job in fetch_yc() if is_startup_relevant(job))
-    return [job for job in jobs if not is_outside_us(job)]
+    ignored = {name.lower() for name in settings["ignored_companies"]}
+    return [job for job in jobs if not is_outside_us(job) and job.company.lower() not in ignored]
 
 
 if __name__ == "__main__":

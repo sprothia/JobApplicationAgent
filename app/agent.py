@@ -11,7 +11,15 @@ from langchain.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from config.constants import ROOT
-from tools import apply_to_jobs, check_for_new_jobs, list_submitted, search_open_jobs
+from tools import (
+    add_company,
+    apply_to_jobs,
+    check_for_new_jobs,
+    list_companies,
+    list_submitted,
+    remove_company,
+    search_open_jobs,
+)
 
 load_dotenv(ROOT / ".env", override=True)  # .env wins over an old key set in the shell
 
@@ -36,7 +44,10 @@ Rules:
 
 agent = create_agent(
     MODEL,
-    tools=[tool(search_open_jobs), tool(check_for_new_jobs), tool(list_submitted), tool(apply_to_jobs)],
+    tools=[
+        tool(f)
+        for f in (search_open_jobs, check_for_new_jobs, list_submitted, apply_to_jobs, list_companies, add_company, remove_company)
+    ],
     system_prompt=SYSTEM_PROMPT,
     checkpointer=InMemorySaver(),  # remembers earlier messages in this chat
 )
