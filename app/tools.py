@@ -10,6 +10,12 @@ from get_jobs import failed_boards
 HIDDEN_STATUSES = {"skipped", "closed"}
 
 
+def ask_in_chat(question: str) -> str:
+    """How apply_to_jobs asks him things: show the question and wait for his reply."""
+    print("\nAgent: " + question.strip())
+    return input("You: ")
+
+
 def summarize(job_id: str, app: dict) -> dict:
     """The parts of a job the agent needs (applications.json also holds every form answer)."""
     return {
@@ -100,3 +106,18 @@ def list_submitted(company: str | None = None, days: int | None = None, limit: i
         )
     matches.sort(key=lambda app: app["submitted_at"], reverse=True)
     return matches[:limit]
+
+
+def apply_to_jobs(job_ids: list[str]) -> list[dict]:
+    """Apply to open jobs by id (ids come from search_open_jobs). For each job this opens the form in a
+    browser, fills in everything from his profile, asks him any question the profile can't answer, and
+    waits while he reviews and clicks Submit himself. Asking happens inside this tool, so don't ask
+    him the questions beforehand.
+
+    Returns each job's result: "submitted", "skipped", or "not done" (he stopped before it).
+    """
+    applications = load_json(APPLICATIONS_FILE, {})
+    open_ids = [job_id for job_id in job_ids if applications.get(job_id, {}).get("status") in apply.OPEN_STATUSES]
+    results = apply.fill_jobs(load_json(PROFILE_FILE, None), open_ids, ask=ask_in_chat) if open_ids else []
+    results += [{"id": job_id, "result": "not an open job id"} for job_id in job_ids if job_id not in open_ids]
+    return results

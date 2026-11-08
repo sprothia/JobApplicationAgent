@@ -538,8 +538,9 @@ def remember_answer(profile: dict, label: str, value: str):
     save_json(PROFILE_FILE, profile)
 
 
-def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
-    """Ask each unanswered required question in the terminal and fill the answer in on the page.
+def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool, ask=input) -> list[str]:
+    """Ask each unanswered required question and fill the answer in on the page.
+    ask shows a question and returns the reply (input in the terminal; the agent asks in chat).
     Returns the questions left for the user to do in the browser."""
     questions = {q["label"]: q for q in app.get("questions", [])}
     resume_path = resume_file(profile)
@@ -557,10 +558,10 @@ def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
         options = field["options"] or (["Yes", "No"] if field["type"] == "Boolean" else [])
 
         asked += 1
-        print(f"\n  Q{asked}. " + textwrap.shorten(" ".join(label.split()), 300, placeholder="..."))
-        for i, option in enumerate(options, 1):
-            print(f"      {i}. {option}")
-        reply = input("      > " + ("number" if options else "answer") + " (Enter = do it in the browser): ").strip()
+        question = f"\n  Q{asked}. " + textwrap.shorten(" ".join(label.split()), 300, placeholder="...") + "\n"
+        question += "".join(f"      {i}. {option}\n" for i, option in enumerate(options, 1))
+        question += "      > " + ("number" if options else "answer") + " (Enter = do it in the browser): "
+        reply = ask(question).strip()
         if not reply:
             left.append(label)
             continue
@@ -584,16 +585,18 @@ def ask_user(page: Page, app: dict, profile: dict, is_ashby: bool) -> list[str]:
             print("      Couldn't fill that in on the page, so leaving it for the browser.")
             left.append(label)
             continue
-        if input("      Remember this for future forms? (y/n): ").strip().lower() == "y":
+        if ask("      Remember this for future forms? (y/n): ").strip().lower() == "y":
             remember_answer(profile, label, value)
     return left
+
+
+OPEN_STATUSES = ("ready", "needs_input")
 
 
 def fill_all(profile: dict, job_filter: str):
     """job_filter is a company name, a platform ("ashby" / "greenhouse"), or "new" (jobs first seen in
     the latest `python app/apply.py` run); empty means every job."""
     applications = load_json(APPLICATIONS_FILE, {})
-    submitted = load_json(SUBMITTED_FILE, {})
     job_filter = job_filter.lower()
 
     def matches(app: dict) -> bool:
@@ -601,13 +604,21 @@ def fill_all(profile: dict, job_filter: str):
             return app.get("new", False)
         return job_filter in app["company"].lower() or job_filter == app.get("source", "greenhouse")
 
-    todo = [
-        (job_id, app)
-        for job_id, app in applications.items()
-        if app["status"] in ("ready", "needs_input") and matches(app)
-    ]
+    todo = [job_id for job_id, app in applications.items() if app["status"] in OPEN_STATUSES and matches(app)]
     if not todo:
         raise SystemExit("No prepared applications to fill. Run `python app/apply.py` first.")
+    fill_jobs(profile, todo)
+
+
+def fill_jobs(profile: dict, job_ids: list[str], ask=input) -> list[dict]:
+    """Open each job's form in a browser, fill it in, and ask about anything left blank.
+    The user clicks Submit, then answers y (submitted), s (skip) or q (stop).
+    ask shows a question and returns the reply (input in the terminal; the agent asks in chat).
+    Returns what happened to each job: "submitted", "skipped", or "not done" (stopped before it)."""
+    applications = load_json(APPLICATIONS_FILE, {})
+    submitted = load_json(SUBMITTED_FILE, {})
+    todo = [(job_id, applications[job_id]) for job_id in job_ids]
+    results = [{"company": app["company"], "title": app["title"].strip(), "result": "not done"} for _, app in todo]
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -632,7 +643,7 @@ def fill_all(profile: dict, job_filter: str):
 
                 if app["unanswered"]:
                     print(f"\n    {len(app['unanswered'])} question(s) need your answer:")
-                left = ask_user(page, app, profile, is_ashby) + failed
+                left = ask_user(page, app, profile, is_ashby, ask) + failed
                 if left:
                     print("\n    Do these in the browser:")
                     for label in left:
@@ -646,9 +657,10 @@ def fill_all(profile: dict, job_filter: str):
 
             choice = ""
             while choice not in ("y", "s", "q"):
-                choice = input("\n    Submit in the browser, then type y = submitted, s = skip, q = quit: ").strip().lower()
+                choice = ask("\n    Submit in the browser, then type y = submitted, s = skip, q = quit: ").strip().lower()
             if choice == "q":
-                return
+                return results
+            results[i - 1]["result"] = "submitted" if choice == "y" else "skipped"
             if choice == "y":
                 del applications[job_id]
                 app["status"] = "submitted"
@@ -664,6 +676,7 @@ def fill_all(profile: dict, job_filter: str):
                 pass  # already closed by the user
         if browser.is_connected():
             browser.close()
+    return results
 
 
 def main():
